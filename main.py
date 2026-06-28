@@ -1,30 +1,43 @@
-# main.py —— 一键从视频生成脚本
-from video_preprocessor import extract_key_frames
-from ai_analyzer import analyze_video_frames
-from script_generator import generate_playwright_script
-import json
+import typer
+from pathlib import Path
+from rich.console import Console
 
-def video_to_playwright(video_path: str, output_script: str = "test_flow.spec.ts"):
-    print("=== Step 1: 提取关键帧 ===")
-    key_frames = extract_key_frames(
-        video_path, 
-        output_dir="./frames",
-        similarity_threshold=0.90  # 越低 = 提取越多帧
-    )
-    
-    print("\n=== Step 2: AI 分析操作意图 ===")
-    actions = analyze_video_frames(key_frames)
-    
-    # 保存中间结果，便于调试和人工校验
-    with open("actions.json", "w", encoding="utf-8") as f:
-        json.dump(actions, f, ensure_ascii=False, indent=2)
-    print(f"操作序列已保存到 actions.json，共 {len(actions)} 个操作")
-    
-    print("\n=== Step 3: 生成 Playwright 脚本 ===")
-    script = generate_playwright_script(actions, output_script)
-    
-    print(f"\n完成！脚本路径: {output_script}")
-    return script
+app = typer.Typer(help="RPAsystem - 视频转 Playwright 自动化脚本")
+console = Console()
+
+@app.command()
+def generate(
+    video: Path = typer.Argument(..., help="操作录屏视频路径"),
+    output: Path = typer.Option("./scripts/output.spec.ts", help="输出脚本路径"),
+    threshold: float = typer.Option(0.90, help="帧差异阈值，越低提取越多帧"),
+):
+    """从操作录屏视频生成 Playwright 测试脚本"""
+    from pipeline.preprocessor import extract_key_frames
+    from pipeline.analyzer import analyze_video_frames
+    from pipeline.generator import generate_playwright_script
+
+    console.print(f"[bold blue]处理视频:[/] {video}")
+
+    with console.status("抽取关键帧..."):
+        frames = extract_key_frames(str(video), "./frames", threshold)
+    console.print(f"[green]✓[/] 提取到 {len(frames)} 个关键帧")
+
+    with console.status("AI 分析操作意图..."):
+        actions = analyze_video_frames(frames)
+    console.print(f"[green]✓[/] 识别出 {len(actions)} 个操作步骤")
+
+    with console.status("生成 Playwright 脚本..."):
+        generate_playwright_script(actions, str(output))
+    console.print(f"[green]✓[/] 脚本已生成: {output}")
+
+@app.command()
+def run(
+    script: Path = typer.Argument(..., help="要执行的 .spec.ts 脚本"),
+    data_source: str = typer.Option("none", help="数据源类型: api/db/excel/none"),
+):
+    """执行自动化脚本"""
+    console.print(f"[bold blue]执行脚本:[/] {script}")
+    # TODO: 调用 engine.runner
 
 if __name__ == "__main__":
-    video_to_playwright("recording.mp4")
+    app()
