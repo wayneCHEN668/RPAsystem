@@ -1,35 +1,84 @@
-from pydantic_settings import BaseSettings
+"""
+config/settings.py
+-------------------
+从环境变量 / .env 文件读取运行时配置。
+不依赖 pydantic-settings，用标准库 os + dotenv 实现，避免额外安装负担。
+"""
+from __future__ import annotations
+
+import os
 from pathlib import Path
 
-class Settings(BaseSettings):
-    # AI
-    anthropic_api_key: str
+# 自动加载项目根目录的 .env（如果存在）
+_env_file = Path(__file__).parent.parent / ".env"
+if _env_file.exists():
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(_env_file)
+    except ImportError:
+        pass   # dotenv 未安装时静默跳过
 
-    # 目标系统
-    base_url: str = ""
-    sys_username: str = ""
-    sys_password: str = ""
 
-    # 数据库
-    db_host: str = "localhost"
-    db_port: int = 5432
-    db_name: str = ""
-    db_user: str = ""
-    db_pass: str = ""
+class Settings:
+    # ── AI ──────────────────────────────────────
+    @property
+    def anthropic_api_key(self) -> str:
+        return os.environ.get("DASHSCOPE_API_KEY", "")
 
-    # 外部 API
-    ext_api_base: str = ""
-    ext_api_token: str = ""
+    # ── 目标系统 ─────────────────────────────────
+    @property
+    def base_url(self) -> str:
+        return os.environ.get("DASHSCOPE_BASE_URL", "")
+    
+    @property
+    def llm_model(self) -> str:
+        return os.environ.get("DASHSCOPE_MODEL", "")
 
-    # 执行配置
-    headless: bool = False
-    slow_mo: int = 50
-    screenshot_on_fail: bool = True
-    output_dir: Path = Path("./scripts")
-    frames_dir: Path = Path("./frames")
+    @property
+    def sys_username(self) -> str:
+        return os.environ.get("SYS_USERNAME", "")
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    @property
+    def sys_password(self) -> str:
+        return os.environ.get("SYS_PASSWORD", "")
+
+    # ── 执行配置 ─────────────────────────────────
+    @property
+    def headless(self) -> bool:
+        return os.environ.get("HEADLESS", "false").lower() == "true"
+
+    @property
+    def slow_mo(self) -> int:
+        return int(os.environ.get("SLOW_MO", "50"))
+
+    @property
+    def screenshot_on_fail(self) -> bool:
+        return os.environ.get("SCREENSHOT_ON_FAIL", "true").lower() == "true"
+
+    @property
+    def output_dir(self) -> Path:
+        return Path(os.environ.get("OUTPUT_DIR", "./scripts"))
+
+    @property
+    def frames_dir(self) -> Path:
+        return Path(os.environ.get("FRAMES_DIR", "./frames"))
+
+    # ── pipeline 调参 ────────────────────────────
+    @property
+    def similarity_threshold(self) -> float:
+        return float(os.environ.get("SIMILARITY_THRESHOLD", "0.92"))
+
+    @property
+    def sample_interval_sec(self) -> float:
+        return float(os.environ.get("SAMPLE_INTERVAL_SEC", "0.2"))
+
+    @property
+    def analyzer_model(self) -> str:
+        return os.environ.get("ANALYZER_MODEL", "claude-sonnet-4-6")
+
+    @property
+    def analyzer_concurrency(self) -> int:
+        return int(os.environ.get("ANALYZER_CONCURRENCY", "3"))
+
 
 settings = Settings()

@@ -1,0 +1,39 @@
+# ── 敏感配置 ─────────────────────────────────
+.env
+
+# ── 临时产出物 ────────────────────────────────
+frames/
+frames_inspect/
+reports/
+screenshots/
+
+# ── Python ───────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+
+# ── Node / TypeScript ────────────────────────
+# ts_check 的 node_modules 需要提交（validator 依赖它）
+# 如不想提交，改用 postinstall 脚本自动安装
+# ts_check/node_modules/
+
+# 生成的测试脚本（可按需调整，也可以提交）
+# scripts/
+
+# ── 视频原始素材 ──────────────────────────────
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# ── OS / IDE ─────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
