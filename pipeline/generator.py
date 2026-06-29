@@ -123,6 +123,7 @@ class PlaywrightGenerator:
         self.suite_name = suite_name
         self.timeout    = timeout          # 元素等待超时（ms）
         self.min_confidence = min_confidence
+        self._data_refs: dict[int, DataRef] | None = None
 
     # ── 数据注入 ──────────────────────────────
 
@@ -289,7 +290,8 @@ class PlaywrightGenerator:
                 current_name  = self._infer_block_name(action)
                 current_stmts = []
 
-            stmt = self._action_to_statement(action)
+            data_ref = self._data_refs.get(id(action)) if self._data_refs else None
+            stmt = self._action_to_statement(action, data_ref)
             current_stmts.append(stmt)
 
         if current_stmts:
@@ -312,9 +314,9 @@ class PlaywrightGenerator:
 
     # ── 语句映射 ──────────────────────────────
 
-    def _action_to_statement(self, action: ActionInfo) -> ScriptStatement:
+    def _action_to_statement(self, action: ActionInfo, data_ref: DataRef | None = None) -> ScriptStatement:
         """将单个 ActionInfo 映射为 ScriptStatement"""
-        code = self._render_action_code(action)
+        code = self._render_action_code(action, data_ref)
         assertion = self._render_assertion(action)
 
         # 低置信度加警告注释
@@ -324,7 +326,7 @@ class PlaywrightGenerator:
 
         return ScriptStatement(code=code, comment=comment, assertion=assertion)
 
-    def _render_action_code(self, action: ActionInfo) -> str:
+    def _render_action_code(self, action: ActionInfo, data_ref: DataRef | None = None) -> str:
         """根据 action_type 和 element_hint 生成具体的 Playwright 调用语句"""
         hint = action.element_hint
         locator = self._build_locator(hint, action.action_type)
@@ -338,12 +340,19 @@ class PlaywrightGenerator:
                 return f"await {locator}.click();"
 
             case "fill":
-                value = _escape_ts_string(action.input_value)
-                return f"await {locator}.fill('{value}');"
+                if data_ref:
+                    return f"await {locator}.fill(d('{_escape_ts_string(data_ref.group)}', '{_escape_ts_string(data_ref.field)}'));"
+                else:
+                    # 降级：没有 data_ref 时仍用硬编码（向后兼容）
+                    value = _escape_ts_string(action.input_value)
+                    return f"await {locator}.fill('{value}');"
 
             case "select":
-                value = _escape_ts_string(action.input_value)
-                return f"await {locator}.selectOption({{ label: '{value}' }});"
+                if data_ref:
+                    return f"await {locator}.selectOption({{ label: d('{_escape_ts_string(data_ref.group)}', '{_escape_ts_string(data_ref.field)}') }});"
+                else:
+                    value = _escape_ts_string(action.input_value)
+                    return f"await {locator}.selectOption({{ label: '{value}' }});"
 
             case "scroll":
                 return "await page.keyboard.press('PageDown');"
@@ -415,7 +424,8 @@ class PlaywrightGenerator:
     def _render_before_each(self, login_actions: list[ActionInfo]) -> str:
         lines = ["", "  test.beforeEach(async ({ page }) => {", "    // 登录"]
         for action in login_actions:
-            stmt = self._action_to_statement(action)
+            data_ref = self._data_refs.get(id(action)) if self._data_refs else None
+            stmt = self._action_to_statement(action, data_ref)
             if stmt.comment:
                 lines.append(f"    // {stmt.comment}")
             lines.append(f"    {stmt.code}")
