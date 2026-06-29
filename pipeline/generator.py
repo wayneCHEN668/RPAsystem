@@ -39,6 +39,14 @@ class ScriptStatement:
 
 
 @dataclass
+class DataRef:
+    """数据引用 — 每条 fill/select 操作映射到一个 (group, field) 对"""
+    group: str
+    field: str
+    value: str          # 默认值（LLM 识别的用户输入，作为模板填充）
+
+
+@dataclass
 class TestBlock:
     """对应一个 test('...', async ({ page }) => { ... }) 块"""
     name: str
@@ -54,6 +62,8 @@ class GenerateResult:
     skipped_actions: int = 0     # unknown / 低置信度被跳过的数量
     test_blocks: int = 0
     elapsed_sec: float = 0.0
+    data_json_path: str = ""     # 输出的 .data.json 路径
+    data_entries: dict = field(default_factory=dict)   # 数据条目
 
     def summary(self) -> str:
         return (
@@ -113,6 +123,66 @@ class PlaywrightGenerator:
         self.suite_name = suite_name
         self.timeout    = timeout          # 元素等待超时（ms）
         self.min_confidence = min_confidence
+
+    # ── 数据注入 ──────────────────────────────
+
+    @staticmethod
+    def _group_name(action: ActionInfo) -> str:
+        """从 action.page_context 提取数据组名，清理特殊字符"""
+        raw = action.page_context.strip() if action.page_context else "默认步骤"
+        # 移除不可见字符和常见标点，中文标点保留
+        cleaned = re.sub(r'[\r\n\t]', '', raw)
+        cleaned = cleaned.strip()
+        return cleaned or "默认步骤"
+
+    @staticmethod
+    def _field_name(action: ActionInfo) -> str:
+        """从 element_hint 提取数据字段名（优先级: label > placeholder > text）"""
+        hint = action.element_hint
+        return (hint.label or hint.placeholder or hint.text or "字段").strip()
+
+    def _build_data_entries(
+        self, actions: list[ActionInfo]
+    ) -> tuple[dict[str, dict[str, str]], dict[int, DataRef]]:
+        """
+        从 actions 提取 fill/select 操作，按 page_context 分组构建 data dict。
+        返回 (data_entries, action_id_to_ref).
+        """
+        data: dict[str, dict[str, str]] = {}
+        refs: dict[int, DataRef] = {}
+        group_counter: dict[str, int] = {}     # 追踪同名组出现次数
+
+        for action in actions:
+            if action.action_type not in ("fill", "select"):
+                continue
+
+            group = self._group_name(action)
+            field = self._field_name(action)
+            value = action.input_value
+
+            # 同组名去重：首次不加后缀，第二次加 _2，第三次 _3 ...
+            group_counter[group] = group_counter.get(group, 0) + 1
+            unique_group = group if group_counter[group] == 1 else f"{group}_{group_counter[group]}"
+
+            if unique_group not in data:
+                data[unique_group] = {}
+            else:
+                # 同组内字段名去重
+                original = field
+                n = 1
+                while field in data[unique_group]:
+                    n += 1
+                    field = f"{original}_{n}"
+
+            data[unique_group][field] = value
+            refs[id(action)] = DataRef(group=unique_group, field=field, value=value)
+
+        return data, refs
+
+    @staticmethod
+    def _render_data_json(data: dict[str, dict[str, str]]) -> str:
+        """将 data dict 渲染为格式化的 JSON 字符串"""
+        return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
 
     # ── 公开接口 ──────────────────────────────
 
