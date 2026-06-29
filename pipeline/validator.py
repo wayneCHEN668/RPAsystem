@@ -198,17 +198,18 @@ def _check_low_confidence(script: str) -> list[Issue]:
 
 
 def _check_hardcoded_credentials(script: str) -> list[Issue]:
-    """检测疑似硬编码密码（password= 后紧跟非空字符串且不是环境变量）"""
+    """检测疑似硬编码密码 — 排除已使用 d() 数据引用的调用"""
     issues = []
-    # 匹配 .fill('xxx') 或 .fill("xxx") 紧跟在密码相关 locator 后
+    # 匹配密码相关 locator 后紧跟 .fill('字面量值')，但不是 .fill(d(...))
     pattern = re.compile(
-        r"(?:password|passwd|密码)[^;]*?\.fill\(['\"](?!process\.env)([^'\"]{1,50})['\"]",
+        r"(?:password|passwd|密码)[^;]*?"
+        r"\.fill\(\s*(?!d\()['\"]([^'\"]{1,50})['\"]",
         re.IGNORECASE,
     )
     for m in pattern.finditer(script):
         line_no = script[: m.start()].count("\n") + 1
         issues.append(Issue("warning", "HARDCODED_CREDENTIAL",
-                            f"第 {line_no} 行疑似硬编码密码，请改为 process.env.PASSWORD",
+                            f"第 {line_no} 行疑似硬编码密码，请改用数据文件或 process.env.PASSWORD",
                             line=line_no))
     return issues
 
