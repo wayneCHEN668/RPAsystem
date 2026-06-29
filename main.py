@@ -75,7 +75,7 @@ def generate(
     ),
     api_key: str = typer.Option(
         "", "--api-key",
-        help="Anthropic API Key，覆盖环境变量 ANTHROPIC_API_KEY",
+        help="DashScope API Key，覆盖环境变量 DASHSCOPE_API_KEY",
     ),
 ):
     """
@@ -96,11 +96,11 @@ def generate(
     effective_suite = suite_name or video.stem.replace("_", " ").replace("-", " ").title()
     effective_url   = base_url or settings.base_url
     effective_thr   = threshold if threshold > 0 else settings.similarity_threshold
-    effective_key   = api_key or settings.anthropic_api_key
+    effective_key   = api_key or settings.api_key
     frames_dir      = str(settings.frames_dir)
 
     if not effective_key:
-        console.print("[red]✗ 未设置 ANTHROPIC_API_KEY[/]，请在 .env 中配置或用 --api-key 传入")
+        console.print("[red]✗ 未设置 DASHSCOPE_API_KEY[/]，请在 .env 中配置或用 --api-key 传入")
         raise typer.Exit(1)
 
     # ── 打印运行参数 ──────────────────────────
@@ -158,6 +158,7 @@ def generate(
         api_key=effective_key,
         model=settings.analyzer_model,
         max_concurrency=settings.analyzer_concurrency,
+        base_url=settings.dashscope_base_url or None,
     )
 
     with Progress(
@@ -196,7 +197,7 @@ def generate(
     )
 
     if ana.success_count == 0:
-        console.print("[red]✗ 所有帧分析失败，请检查 API Key 和网络[/]")
+        console.print("[red]✗ 所有帧分析失败，请检查 DASHSCOPE_API_KEY 和网络[/]")
         _cleanup_frames(frames_dir, keep_frames)
         raise typer.Exit(1)
 
@@ -231,6 +232,8 @@ def generate(
         f"[dim]{gen.total_actions - gen.skipped_actions}/{gen.total_actions} 操作  "
         f"{gen.test_blocks} 个 test 块  耗时 {gen.elapsed_sec:.3f}s[/]"
     )
+    if gen.data_json_path:
+        console.print(f"[green]✓[/] 数据模板  [dim]{gen.data_json_path}[/]")
 
     # ── Step 4: 验证 ──────────────────────────
     if not no_validate:
@@ -245,12 +248,15 @@ def generate(
     _cleanup_frames(frames_dir, keep_frames)
 
     elapsed = round(time.perf_counter() - t_total, 1)
-    console.print(Panel.fit(
-        f"[bold green]完成![/]  总耗时 {elapsed}s\n"
-        f"脚本路径: [cyan]{effective_output}[/]\n\n"
-        f"[dim]运行脚本: npx playwright test {effective_output}[/]",
-        border_style="green",
-    ))
+    panel_lines = [
+        f"[bold green]完成![/]  总耗时 {elapsed}s",
+        f"脚本路径: [cyan]{effective_output}[/]",
+    ]
+    if gen.data_json_path:
+        panel_lines.append(f"数据模板: [cyan]{gen.data_json_path}[/]")
+    panel_lines.append("")
+    panel_lines.append(f"[dim]编辑数据 → 运行: npx playwright test {effective_output}[/]")
+    console.print(Panel.fit("\n".join(panel_lines), border_style="green"))
 
 
 # ─────────────────────────────────────────────
