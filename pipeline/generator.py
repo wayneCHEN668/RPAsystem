@@ -123,7 +123,7 @@ class PlaywrightGenerator:
         self.suite_name = suite_name
         self.timeout    = timeout          # 元素等待超时（ms）
         self.min_confidence = min_confidence
-        self._data_refs: dict[int, DataRef] | None = None
+        self._data_refs: dict[int, DataRef] = {}   # 在 generate() 中填充
 
     # ── 数据注入 ──────────────────────────────
 
@@ -196,6 +196,10 @@ class PlaywrightGenerator:
         t_start = time.perf_counter()
         actions = source.actions if isinstance(source, AnalyzeResult) else source
 
+        # Compute data file name
+        spec_stem = Path(output_path).stem
+        data_file = f"{spec_stem}.data.json"
+
         result = GenerateResult(
             script="",
             output_path=output_path,
@@ -206,18 +210,28 @@ class PlaywrightGenerator:
         valid, skipped = self._filter_actions(actions)
         result.skipped_actions = skipped
 
+        # 2. 构建数据引用
+        data_entries, self._data_refs = self._build_data_entries(valid)
+        result.data_entries = data_entries
+
         login_actions, flow_actions = self._split_login(valid)
         test_blocks   = self._group_into_blocks(flow_actions)
         result.test_blocks = len(test_blocks)
 
-        # 2. 渲染脚本
-        script = self._render_script(login_actions, test_blocks)
+        # 3. 渲染脚本
+        script = self._render_script(login_actions, test_blocks, data_file=data_file)
         result.script = script
 
-        # 3. 写文件
+        # 4. 写 .spec.ts
         out = Path(output_path)
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(script, encoding="utf-8")
+
+        # 5. 写 .data.json
+        data_json_path = str(out.parent / data_file)
+        data_json_content = self._render_data_json(data_entries)
+        Path(data_json_path).write_text(data_json_content, encoding="utf-8")
+        result.data_json_path = data_json_path
 
         result.elapsed_sec = round(time.perf_counter() - t_start, 4)
         return result
@@ -391,6 +405,7 @@ class PlaywrightGenerator:
         self,
         login_actions: list[ActionInfo],
         test_blocks: list[TestBlock],
+        data_file: str = "test.data.json",
     ) -> str:
         """拼装完整的 TypeScript 脚本"""
         parts: list[str] = []
@@ -402,8 +417,8 @@ class PlaywrightGenerator:
             base_url=self.base_url or "(未检测到，请手动设置)",
         ))
 
-        # import
-        parts.append(_IMPORTS)
+        # import + data 加载
+        parts.append(_DATA_IMPORTS.format(data_file=data_file))
 
         # test.describe 开始
         parts.append(f'\ntest.describe("{self.suite_name}", () => {{')
@@ -464,11 +479,22 @@ _FILE_HEADER = """\
  *    重点检查：
  *    1. 标有 TODO 的选择器 — 需要手动补充
  *    2. 标有「低置信度」的操作 — AI 不确定，请验证
- *    3. 输入值（密码等敏感数据）— 替换为环境变量
+ *    3. 输入值 — 修改同目录下的 .data.json 文件
+ *    4. 密码等敏感数据请勿写入 .data.json，改用环境变量
  */"""
 
 _IMPORTS = """\
 import { test, expect } from '@playwright/test';"""
+
+_DATA_IMPORTS = """\
+import {{ test, expect }} from '@playwright/test';
+import testData from './{data_file}';
+
+const data = testData as Record<string, Record<string, string>>;
+function d(group: string, field: string): string {{
+    return data[group]?.[field] ?? '';
+}}
+"""
 
 
 # ─────────────────────────────────────────────
