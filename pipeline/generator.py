@@ -151,7 +151,6 @@ class PlaywrightGenerator:
         """
         data: dict[str, dict[str, str]] = {}
         refs: dict[int, DataRef] = {}
-        group_counter: dict[str, int] = {}     # 追踪同名组出现次数
 
         for action in actions:
             if action.action_type not in ("fill", "select"):
@@ -161,22 +160,18 @@ class PlaywrightGenerator:
             field = self._field_name(action)
             value = action.input_value
 
-            # 同组名去重：首次不加后缀，第二次加 _2，第三次 _3 ...
-            group_counter[group] = group_counter.get(group, 0) + 1
-            unique_group = group if group_counter[group] == 1 else f"{group}_{group_counter[group]}"
+            if group not in data:
+                data[group] = {}
 
-            if unique_group not in data:
-                data[unique_group] = {}
-            else:
-                # 同组内字段名去重
-                original = field
-                n = 1
-                while field in data[unique_group]:
-                    n += 1
-                    field = f"{original}_{n}"
+            # 同组内字段名去重
+            original = field
+            n = 1
+            while field in data[group]:
+                n += 1
+                field = f"{original}_{n}"
 
-            data[unique_group][field] = value
-            refs[id(action)] = DataRef(group=unique_group, field=field, value=value)
+            data[group][field] = value
+            refs[id(action)] = DataRef(group=group, field=field, value=value)
 
         return data, refs
 
