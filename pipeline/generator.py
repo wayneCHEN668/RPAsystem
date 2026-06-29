@@ -191,9 +191,15 @@ class PlaywrightGenerator:
         t_start = time.perf_counter()
         actions = source.actions if isinstance(source, AnalyzeResult) else source
 
-        # Compute data file name
-        spec_stem = Path(output_path).stem
-        data_file = f"{spec_stem}.data.json"
+        # Compute data file name (strip .spec.ts or .ts suffix)
+        spec_name = Path(output_path).name
+        if spec_name.endswith(".spec.ts"):
+            base = spec_name[:-8]  # remove ".spec.ts"
+        elif spec_name.endswith(".ts"):
+            base = spec_name[:-3]  # remove ".ts"
+        else:
+            base = Path(output_path).stem
+        data_file = f"{base}.data.json"
 
         result = GenerateResult(
             script="",
