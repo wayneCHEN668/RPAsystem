@@ -22,8 +22,19 @@ if _env_file.exists():
 class Settings:
     # ── AI ──────────────────────────────────────
     @property
-    def anthropic_api_key(self) -> str:
+    def api_key(self) -> str:
+        """DashScope API Key（从 DASHSCOPE_API_KEY 环境变量读取）"""
         return os.environ.get("DASHSCOPE_API_KEY", "")
+
+    @property
+    def anthropic_api_key(self) -> str:
+        """已废弃 — 请改用 api_key"""
+        return self.api_key
+
+    @property
+    def dashscope_base_url(self) -> str:
+        """DashScope 自定义端点（从 DASHSCOPE_BASE_URL 环境变量读取）"""
+        return os.environ.get("DASHSCOPE_BASE_URL", "")
 
     # ── 目标系统 ─────────────────────────────────
     @property
@@ -74,7 +85,7 @@ class Settings:
 
     @property
     def analyzer_model(self) -> str:
-        return os.environ.get("ANALYZER_MODEL", "claude-sonnet-4-6")
+        return os.environ.get("ANALYZER_MODEL", "qwen-vl-max-latest")
 
     @property
     def analyzer_concurrency(self) -> int:

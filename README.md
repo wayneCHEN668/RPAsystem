@@ -13,7 +13,7 @@ recording.mp4
      │
      ▼  1. 视频抽帧          opencv + SSIM 差异检测，过滤重复帧
      │
-     ▼  2. AI 分析操作意图   Claude Vision 识别每帧的 click / fill / navigate …
+     ▼  2. AI 分析操作意图   Qwen VL 识别每帧的 click / fill / navigate …
      │
      ▼  3. 生成脚本          按页面分组，生成语义化 Playwright locator
      │
@@ -82,7 +82,8 @@ cp .env.example .env
 编辑 `.env`，至少填写：
 
 ```bash
-ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxx   # 必填
+DASHSCOPE_API_KEY=sk-xxxxxxxxxxxxxxxx   # 必填（阿里云百炼）
+DASHSCOPE_BASE_URL=                     # 可选，自定义 DashScope 端点
 BASE_URL=https://your-system.com        # 目标系统入口
 ```
 
@@ -132,7 +133,7 @@ python main.py generate <video> [选项]
   --suite-name,  -s   test.describe 名称（默认用视频文件名）
   --base-url,    -u   目标系统 URL（覆盖 .env BASE_URL）
   --threshold,   -t   帧差异阈值 0~1（越高提取越多帧，默认 0.92）
-  --api-key          Anthropic API Key（覆盖环境变量）
+  --api-key          DashScope API Key（覆盖环境变量）
   --no-validate      跳过生成后的脚本验证
   --keep-frames      保留临时关键帧文件（默认自动删除）
   --save-actions     保存 AI 识别的操作序列到 actions.json（调试用）
@@ -200,7 +201,7 @@ python main.py validate <script.spec.ts> [选项]
 RPAsystem/
 ├── pipeline/               # 核心流水线
 │   ├── preprocessor.py     视频抽帧（无 API 依赖）
-│   ├── analyzer.py         Claude Vision 分析
+│   ├── analyzer.py         Qwen VL 分析
 │   ├── generator.py        Playwright 脚本生成
 │   └── validator.py        双层脚本验证
 ├── engine/                 # 执行引擎（待完善）
@@ -234,7 +235,7 @@ python -m pytest tests/ -v
 
 # 或逐模块运行
 python tests/test_preprocessor.py   #  9 个
-python tests/test_analyzer.py       # 13 个（需要 ANTHROPIC_API_KEY 才跑集成测试）
+python tests/test_analyzer.py       # 13 个（需要 DASHSCOPE_API_KEY 才跑集成测试）
 python tests/test_generator.py      # 36 个
 python tests/test_validator.py      # 38 个
 python tests/test_main.py           # 23 个

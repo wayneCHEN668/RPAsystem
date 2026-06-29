@@ -5,6 +5,8 @@ __pycache__/
 .pytest_cache/
 node_modules/
 test-results/
+video/
+.venv/
 playwright-report/
 *.mp4
 *.avi

@@ -1,10 +1,10 @@
 """
 pipeline/analyzer.py
 ---------------------
-将关键帧序列发送给多模态 LLM，识别每帧的 UI 操作意图。
+将关键帧序列发送给多模态 LLM（Qwen VL），识别每帧的 UI 操作意图。
 
 主要职责：
-  1. 将帧图片编码为 base64 发给 Claude Vision
+  1. 将帧图片编码为 base64 发给 Qwen VL（DashScope）
   2. 结合上下文（前一帧描述）提升识别连贯性
   3. 解析结构化 JSON 操作意图
   4. 支持批量并发（rate limit 友好的信号量控制）
@@ -23,7 +23,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-import anthropic
+import dashscope
+from dashscope import AioMultiModalConversation
 from loguru import logger
 from tenacity import (
     retry,
@@ -33,6 +34,15 @@ from tenacity import (
 )
 
 from pipeline.preprocessor import FrameInfo, PreprocessResult
+
+
+# ─────────────────────────────────────────────
+# 自定义异常
+# ─────────────────────────────────────────────
+
+class RateLimitError(Exception):
+    """DashScope 频率限制 / 资源耗尽错误（内部使用，用于触发退避重试）"""
+    pass
 
 
 # ─────────────────────────────────────────────
@@ -175,7 +185,7 @@ _CONTEXT_SECTION_TEMPLATE = """\
 
 class FrameAnalyzer:
     """
-    调用 Claude Vision 分析帧序列，输出结构化操作意图列表。
+    调用 Qwen VL 分析帧序列，输出结构化操作意图列表。
 
     用法（同步）：
         analyzer = FrameAnalyzer()
@@ -188,12 +198,16 @@ class FrameAnalyzer:
     def __init__(
         self,
         api_key: str | None = None,
-        model: str = "claude-sonnet-4-6",
+        model: str = "qwen-vl-max-latest",
         max_concurrency: int = 3,
         max_retries: int = 3,
+        base_url: str | None = None,
     ):
-        self._client = anthropic.Anthropic(api_key=api_key)
-        self._async_client = anthropic.AsyncAnthropic(api_key=api_key)
+        # 设置 DashScope 全局配置（模块级别，后续所有调用共享）
+        if api_key:
+            dashscope.api_key = api_key
+        if base_url:
+            dashscope.base_http_api_url = base_url
         self.model = model
         self.max_concurrency = max_concurrency
         self.max_retries = max_retries
@@ -274,8 +288,8 @@ class FrameAnalyzer:
                 f"  帧 {frame.frame_idx} ({frame.timestamp}s): "
                 f"{action.action_type} — {action.description[:40]}"
             )
-        except anthropic.RateLimitError:
-            logger.warning(f"  帧 {frame.frame_idx}: Rate limit，等待后重试")
+        except RateLimitError:
+            logger.warning(f"  帧 {frame.frame_idx}: 频率限制，等待 5s 后重试")
             await asyncio.sleep(5)
             return await self._analyze_single(frame, prev_description)
         except Exception as e:
@@ -286,13 +300,13 @@ class FrameAnalyzer:
         return action
 
     @retry(
-        retry=retry_if_exception_type((anthropic.APIConnectionError, anthropic.InternalServerError)),
+        retry=retry_if_exception_type((ConnectionError, asyncio.TimeoutError, OSError)),
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         reraise=True,
     )
     async def _call_llm(self, image_b64: str, prev_description: str) -> str:
-        """调用 Claude Vision API，返回原始 JSON 字符串"""
+        """调用 Qwen Vision API（DashScope），返回原始 JSON 字符串"""
         context_section = (
             _CONTEXT_SECTION_TEMPLATE.format(prev_description=prev_description)
             if prev_description
@@ -300,28 +314,39 @@ class FrameAnalyzer:
         )
         user_prompt = _USER_PROMPT_TEMPLATE.format(context_section=context_section)
 
-        response = await self._async_client.messages.create(
+        messages = [
+            {"role": "system", "content": [{"text": _SYSTEM_PROMPT}]},
+            {"role": "user", "content": [
+                {"image": f"data:image/png;base64,{image_b64}"},
+                {"text": user_prompt},
+            ]},
+        ]
+
+        response = await AioMultiModalConversation.call(
             model=self.model,
-            max_tokens=512,
-            system=_SYSTEM_PROMPT,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": image_b64,
-                            },
-                        },
-                        {"type": "text", "text": user_prompt},
-                    ],
-                }
-            ],
+            messages=messages,
+            result_format="message",
         )
-        return response.content[0].text
+
+        if response.status_code == 200:
+            return response.output.choices[0].message.content[0]["text"]
+
+        # ── 错误处理 ──
+        code = getattr(response, 'code', '')
+        message = getattr(response, 'message', 'unknown')
+
+        # 服务端临时错误 → 通过 tenacity 重试
+        if code in ('InternalError', 'ServiceUnavailable', 'ServiceUnavailableTemporary'):
+            raise ConnectionError(f"DashScope 服务端错误 {code}: {message}")
+
+        # Rate limit / 资源耗尽 → 抛出 RateLimitError，由 _analyze_single 处理
+        if code in ('Rate.LimitExceeded', 'ResourceExhausted', 'Throttling', 'Throttling.AllocationQuota'):
+            raise RateLimitError(f"{code}: {message}")
+
+        # 其他 API 错误（参数错误、权限等）→ 不重试
+        raise RuntimeError(
+            f"DashScope API 错误 (status={response.status_code}, code={code}): {message}"
+        )
 
 
 # ─────────────────────────────────────────────
@@ -332,8 +357,9 @@ def analyze_frames(
     source: PreprocessResult | list[FrameInfo],
     *,
     api_key: str | None = None,
-    model: str = "claude-sonnet-4-6",
+    model: str = "qwen-vl-max-latest",
     max_concurrency: int = 3,
+    base_url: str | None = None,
 ) -> AnalyzeResult:
     """
     顶层便捷函数，直接接收 preprocessor 的输出，返回操作意图列表。
@@ -351,6 +377,7 @@ def analyze_frames(
         api_key=api_key,
         model=model,
         max_concurrency=max_concurrency,
+        base_url=base_url,
     )
     return analyzer.analyze(source)
 

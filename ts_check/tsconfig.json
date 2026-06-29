@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "types": ["@playwright/test"],
+    "strict": true,
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "lib": ["ES2022"]
+  }
+}

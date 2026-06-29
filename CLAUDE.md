@@ -1,4 +1,6 @@
-# RPAsystem — Claude Code 规则文档
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## 项目概述
 
@@ -10,7 +12,7 @@
   │
   ▼ pipeline/preprocessor.py   视频抽帧 + SSIM 筛关键帧
   │
-  ▼ pipeline/analyzer.py       Claude Vision 识别操作意图
+  ▼ pipeline/analyzer.py       Qwen VL（DashScope）识别操作意图
   │
   ▼ pipeline/generator.py      生成 Playwright .spec.ts 脚本
   │
@@ -25,31 +27,84 @@
 |---|---|
 | pipeline / CLI | Python 3.11+ |
 | 视频处理 | opencv-python + scikit-image |
-| AI 视觉分析 | Anthropic Claude Vision API |
+| AI 视觉分析 | DashScope SDK → Qwen VL (qwen-vl-max-latest) |
 | 脚本生成 | 纯字符串模板（无 AST 依赖） |
 | 脚本验证 | 自定义规则 + tsc --noEmit |
 | 生成的测试脚本 | TypeScript + Playwright |
 | CLI | typer + rich |
+| 日志 | loguru（禁止 print） |
+| 重试 | tenacity |
+
+## 常用命令
+
+```bash
+# 创建虚拟环境并安装依赖（必须在 venv 中）
+python -m venv .venv
+.venv\Scripts\activate     # Windows
+pip install -r requirements.txt
+
+# 调试抽帧效果（不调用 AI，免费）
+python main.py inspect recording.mp4
+python main.py inspect recording.mp4 --threshold 0.90 --interval 0.2
+
+# 生成脚本（完整 pipeline）
+python main.py generate recording.mp4 --output scripts/test_order.spec.ts --suite-name "工单流程"
+python main.py generate recording.mp4 --no-validate --keep-frames --save-actions
+
+# 验证已有脚本
+python main.py validate scripts/test_order.spec.ts
+python main.py validate scripts/test_order.spec.ts --no-tsc
+
+# 运行生成的 Playwright 脚本
+npx playwright install chromium
+npx playwright test scripts/test_order.spec.ts
+
+# 运行测试
+python -m pytest tests/ -v
+python tests/test_preprocessor.py
+python tests/test_generator.py
+```
+
+## API 架构（重要）
+
+项目通过 **DashScope**（阿里云百炼）原生调用 Qwen VL 多模态模型：
+
+- `DASHSCOPE_API_KEY` — API 密钥（必填，从阿里云百炼控制台获取）
+- `DASHSCOPE_BASE_URL` — 自定义端点（可选，默认自动选择区域）
+- `ANALYZER_MODEL` — 模型标识（默认 `qwen-vl-max-latest`）
+
+代码使用 DashScope SDK（`dashscope` 包），通过 `AioMultiModalConversation.call()` 异步调用。
+`dashscope.api_key` 在 `FrameAnalyzer.__init__` 中设置（模块级别全局配置）。
+`dashscope.base_http_api_url` 在传入 `base_url` 参数时设置。
 
 ## 目录结构
 
 ```
 RPAsystem/
-├── pipeline/          # 核心流水线（职责严格分离）
-│   ├── preprocessor.py   抽帧，无外部 API 依赖
-│   ├── analyzer.py       LLM 分析，依赖 anthropic SDK
-│   ├── generator.py      代码生成，纯 Python
-│   └── validator.py      验证，依赖 ts_check/ 环境
-├── engine/            # 执行引擎（runner/browser/scheduler/reporter）
-├── data/              # 数据层（api_client/db_client/file_reader）
+├── pipeline/          # 核心流水线 —— 视频→脚本（功能完整）
+│   ├── preprocessor.py  无外部 API 依赖
+│   ├── analyzer.py      依赖 dashscope SDK（Qwen VL）
+│   ├── generator.py     纯 Python 字符串模板
+│   └── validator.py     依赖 ts_check/ 环境
+├── engine/            # 执行引擎 —— 运行生成的脚本（架构就绪，部分功能待完善）
+│   ├── runner.py        流程编排
+│   ├── browser.py       Playwright 浏览器封装
+│   ├── scheduler.py     批量/定时调度
+│   └── reporter.py      执行报告
+├── data/              # 数据注入层 —— 为引擎提供外部数据（架构就绪）
+│   ├── provider.py      统一接口（路由到 API/DB/文件）
+│   ├── api_client.py    REST API（带重试 + 缓存）
+│   ├── db_client.py     PostgreSQL / MySQL / SQLite
+│   └── file_reader.py   Excel / CSV / JSON
 ├── config/
-│   └── settings.py       从 .env 读取配置
+│   └── settings.py      从 .env 读取配置
 ├── scripts/           # 生成的 .spec.ts 脚本
-├── tests/             # 所有测试（119 个，全部通过）
-├── ts_check/          # TypeScript 语法检查环境
+├── tests/             # 测试套件
+├── ts_check/          # TypeScript 语法检查环境（需初始化）
 │   ├── tsconfig.json
-│   └── node_modules/  # 需要提交，validator 依赖
-└── main.py            # CLI 入口
+│   └── node_modules/  # npm install @playwright/test typescript
+├── main.py            # CLI 入口（typer）
+└── requirements.txt
 ```
 
 ## 核心约束
@@ -69,7 +124,7 @@ RPAsystem/
 
 ### 生成脚本规范（TypeScript）
 - **必须**使用语义化 locator（`getByRole` > `getByLabel` > `getByPlaceholder` > `getByText`）
-- **禁止**硬编码等待（`time.sleep` / `page.waitForTimeout`）
+- **禁止**硬编码等待（`page.waitForTimeout`）
 - **禁止**硬编码密码，必须用 `process.env.PASSWORD`
 - 选择器无法确定时生成 `TODO` 注释，不造成语法错误
 
@@ -104,59 +159,20 @@ ValidateResult: issues(list[Issue]), passed(bool), tsc_checked, errors, warnings
 Issue: level("error"/"warning"/"info"), code, message, line
 ```
 
-## 常用命令
+## 实现细节注意事项
 
+### analyzer 执行模式
+尽管 `FrameAnalyzer` 接受 `max_concurrency` 参数并使用 `Semaphore`，当前 `_run()` 实现是**严格顺序**的——每帧 `await` 完成后才处理下一帧，因为每帧需要上一帧的 `description` 作为上下文。这意味着 LLM 调用实际上是串行的。如果要实现真正的并发，需要改为批次模式（第一批串行建立上下文，后续批次内并发）。
+
+### ts_check 环境初始化
+validator 的 Layer 2（tsc 语法检查）依赖 `ts_check/` 目录下的 TypeScript 环境。
+使用前需初始化：
 ```bash
-# 安装依赖
-pip install -r requirements.txt
-
-# 安装 TypeScript 检查环境（只需一次）
-cd ts_check && npm install && cd ..
-
-# 调试抽帧效果（不花 API 费）
-python main.py inspect recording.mp4 --threshold 0.90
-
-# 生成脚本（完整流程）
-python main.py generate recording.mp4 \
-  --output scripts/test_order.spec.ts \
-  --suite-name "工单创建流程"
-
-# 验证脚本
-python main.py validate scripts/test_order.spec.ts
-
-# 运行 Playwright 脚本
-npx playwright test scripts/test_order.spec.ts
-
-# 运行所有测试
-python -m pytest tests/ -v
-
-# 运行单个模块测试
-python tests/test_preprocessor.py
-python tests/test_analyzer.py
-python tests/test_generator.py
-python tests/test_validator.py
-python tests/test_main.py
+cd ts_check
+npm init -y
+npm install @playwright/test typescript
+# 创建 tsconfig.json 配置 @playwright/test 类型
 ```
 
-## 开发路径
-
-当前完成状态：
-
-```
-✅ pipeline/preprocessor.py    9 tests
-✅ pipeline/analyzer.py       13 tests
-✅ pipeline/generator.py      36 tests
-✅ pipeline/validator.py      38 tests
-✅ main.py                    23 tests
-⬜ engine/runner.py           待实现
-⬜ engine/browser.py          待实现
-⬜ engine/scheduler.py        待实现
-⬜ engine/reporter.py         待实现
-⬜ data/provider.py           待实现
-⬜ data/api_client.py         待实现
-⬜ data/db_client.py          待实现
-⬜ data/file_reader.py        待实现
-```
-
-继续开发时，**先写 `engine/browser.py`**，它是执行层最底层的依赖，
-其余 engine 模块都依赖它。
+### 依赖安装
+Python 依赖必须安装在虚拟环境中（`.venv/`）。安装前激活 venv。
